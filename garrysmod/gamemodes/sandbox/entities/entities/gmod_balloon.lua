@@ -1,43 +1,48 @@
-
 AddCSLuaFile()
 DEFINE_BASECLASS( "base_gmodentity" )
 
-ENT.PrintName = "Balloon"
+ENT.PrintName = "Button"
 ENT.Editable = true
 
 function ENT:SetupDataTables()
 
-	self:NetworkVar( "Float", 0, "Force", { KeyName = "force", Edit = { type = "Float", order = 1, min = -2000, max = 2000 } } )
+	self:NetworkVar( "Int", 0, "Key" )
+	self:NetworkVar( "Bool", 0, "On" )
+	self:NetworkVar( "Bool", 1, "IsToggle", { KeyName = "tg", Edit = { type = "Boolean", order = 1 } } )
+	self:NetworkVar( "String", 0, "Label", { KeyName = "lbl", Edit = { type = "Generic", order = 2 } } )
 
-	self:NetworkVarNotify( "Force", function() self:PhysWake() end )
+	self:SetOn( false )
+	self:SetIsToggle( false )
 
 end
 
 function ENT:Initialize()
 
-	if ( CLIENT ) then return end
+	if ( SERVER ) then
 
-	self:PhysicsInit( SOLID_VPHYSICS )
-	self:SetRenderMode( RENDERMODE_TRANSALPHA )
+		self:PhysicsInit( SOLID_VPHYSICS )
+		self:SetMoveType( MOVETYPE_VPHYSICS )
+		self:SetSolid( SOLID_VPHYSICS )
+		self:SetUseType( ONOFF_USE )
 
-	-- Set up our physics object here
-	local phys = self:GetPhysicsObject()
-	if ( IsValid( phys ) ) then
+	else
 
-		phys:SetMass( 100 )
-		phys:Wake()
-		phys:EnableGravity( false )
+		self.PosePosition = 0
 
 	end
-
-	self:SetForce( 1 )
-	self:StartMotionController()
 
 end
 
 function ENT:GetOverlayText()
 
-	local txt = "Force: " .. math.floor( self:GetForce() )
+	local text = self:GetLabel()
+
+	text = string.gsub( text, "\\", "" )
+	text = string.sub( text, 0, 20 )
+
+	if ( text == "" ) then return "" end
+
+	local txt =  "\"" .. text .. "\""
 
 	if ( txt == "" ) then return "" end
 	if ( game.SinglePlayer() ) then return txt end
@@ -46,41 +51,98 @@ function ENT:GetOverlayText()
 
 end
 
-function ENT:OnTakeDamage( dmginfo )
+function ENT:Use( activator, caller, type, value )
 
-	if ( self.Indestructible ) then return end
+	if ( !activator:IsPlayer() ) then return end
 
-	local c = self:GetColor()
+	if ( self:GetIsToggle() ) then
 
-	local effectdata = EffectData()
-	effectdata:SetOrigin( self:GetPos() )
-	effectdata:SetStart( Vector( c.r, c.g, c.b ) )
-	util.Effect( "balloon_pop", effectdata )
-
-	if ( self.Explosive ) then
-
-		local effectdata = EffectData()
-		effectdata:SetOrigin( self:GetPos() )
-		effectdata:SetScale( 1 )
-		effectdata:SetMagnitude( 25 )
-		util.Effect( "Explosion", effectdata, true, true )
+		if ( type == USE_ON ) then
+			self:Toggle( !self:GetOn(), activator )
+		end
+		return
 
 	end
 
-	local attacker = dmginfo:GetAttacker()
-	if ( IsValid( attacker ) && attacker:IsPlayer() ) then
-		attacker:SendLua( "achievements.BalloonPopped()" )
+	if ( IsValid( self.LastUser ) ) then return end -- Someone is already using this button
+
+	--
+	-- Switch off
+	--
+	if ( self:GetOn() ) then
+		self:Toggle( false, activator )
+		return
 	end
 
-	self:Remove()
+	--
+	-- Switch on
+	--
+	self:Toggle( true, activator )
+	self:NextThink( CurTime() )
+	self.LastUser = activator
 
 end
 
-function ENT:PhysicsSimulate( phys, deltatime )
+function ENT:Think()
 
-	local vLinear = Vector( 0, 0, self:GetForce() * 5000 ) * deltatime
-	local vAngular = Vector( 0, 0, 0 )
+	-- Add a world tip if the player is looking
+	self.BaseClass.Think( self )
 
-	return vAngular, vLinear, SIM_GLOBAL_FORCE
+	-- Animation
+	if ( CLIENT ) then
+
+		self:UpdateLever()
+
+	end
+
+	--
+	-- If the player looks away while holding down use it will stay on
+	--
+	if ( SERVER && self:GetOn() && !self:GetIsToggle() ) then
+
+		if ( !IsValid( self.LastUser ) || !self.LastUser:KeyDown( IN_USE ) ) then
+
+			self:Toggle( false, self.LastUser )
+			self.LastUser = nil
+
+		end
+
+		self:NextThink( CurTime() )
+
+	end
+
+end
+
+--
+-- The button trigger key
+--
+function ENT:Toggle( bEnable, ply )
+
+	if ( bEnable ) then
+
+		numpad.Activate( self:GetPlayer(), self:GetKey(), true )
+		self:SetOn( true )
+
+	else
+
+		numpad.Deactivate( self:GetPlayer(), self:GetKey(), true )
+		self:SetOn( false )
+
+	end
+
+end
+
+--
+-- Update anim
+--
+function ENT:UpdateLever()
+
+	local TargetPos = 0.0
+	if ( self:GetOn() ) then TargetPos = 1.0 end
+
+	self.PosePosition = math.Approach( self.PosePosition, TargetPos, FrameTime() * 5.0 )
+
+	self:SetPoseParameter( "switch", self.PosePosition )
+	self:InvalidateBoneCache()
 
 end
